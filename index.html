@@ -1,0 +1,135 @@
+<!-- File: web/templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VM Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav>
+        <h1>VM Manager</h1>
+        <ul>
+            <li><a href="#vms" class="active">VM Management</a></li>
+            <li><a href="#deploy">Deploy Application</a></li>
+            <li><a href="#dashboard">Service Dashboard</a></li>
+            <li><a href="#monitor">Live Monitor</a></li>
+        </ul>
+    </nav>
+    <main>
+        <!-- VM Management Section -->
+        <section id="vms-section">
+            <h2>Registered VMs</h2>
+            <table id="vm-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>SSH User</th>
+                        <th>SSH Port</th>
+                        <th>Status (IP)</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="vm-list">
+                    <!-- VM rows will be inserted here -->
+                </tbody>
+            </table>
+            <hr>
+            <h2>Register New VM</h2>
+            <form id="new-vm-form">
+                <label for="vm-name-select">VM Name (from VBox)</label>
+                <select id="vm-name-select" name="name" required></select>
+
+                <label for="ssh-user">SSH User</label>
+                <input type="text" id="ssh-user" name="ssh_user" required>
+
+                <label for="ssh-key-path">SSH Key Path</label>
+                <input type="text" id="ssh-key-path" name="ssh_key_path" required>
+
+                <label for="ssh-port">SSH Port</label>
+                <input type="number" id="ssh-port" name="ssh_port" value="22" required>
+
+                <div class="form-actions">
+                    <button type="submit">Register VM</button>
+                </div>
+            </form>
+        </section>
+
+        <!-- Deploy Section -->
+        <section id="deploy-section" style="display: none;">
+            <h2>Deploy New Application</h2>
+            <form id="deploy-form" enctype="multipart/form-data">
+                <label for="deploy-vm-select">Target VM</label>
+                <select id="deploy-vm-select" name="vm_name" required></select>
+
+                <label for="zip-file">Application (.zip)</label>
+                <input type="file" id="zip-file" name="zip_file" accept=".zip" required>
+
+                <label for="dest-folder">Destination Folder</label>
+                <input type="text" id="dest-folder" name="dest_folder" placeholder="/opt/myapp" required>
+
+                <label for="main-binary">Main Binary Name</label>
+                <input type="text" id="main-binary" name="main_binary" placeholder="my-app-binary" required>
+                
+                <label for="exec-args">Execution Arguments</label>
+                <input type="text" id="exec-args" name="exec_args" placeholder="--port=8080">
+
+                <label for="service-name">Service Name</label>
+                <input type="text" id="service-name" name="service_name" placeholder="myapp.service" required>
+
+                <label for="service-description">Service Description</label>
+                <input type="text" id="service-description" name="service_description" placeholder="My Awesome App" required>
+
+                <div class="form-actions">
+                    <button type="submit">Deploy and Create Service</button>
+                </div>
+            </form>
+            <div class="progress-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <p id="progress-text"></p>
+        </section>
+
+        <!-- Dashboard Section -->
+        <section id="dashboard-section" style="display: none;">
+            <h2>Service Control Dashboard</h2>
+            <div id="dashboard-controls">
+                <select id="dashboard-vm-select"></select>
+                <input type="text" id="dashboard-service-name" placeholder="e.g., myapp.service">
+            </div>
+            <div class="status-badges">
+                Status: <span id="status-badge" class="badge">N/A</span>
+                Sub-status: <span id="sub-status-badge" class="badge">N/A</span>
+            </div>
+            <hr>
+            <div class="button-panel">
+                <button id="start-btn" disabled>Start</button>
+                <button id="stop-btn" disabled>Stop</button>
+                <button id="restart-btn" disabled>Restart</button>
+                <button id="enable-btn">Enable Autostart</button>
+                <button id="disable-btn">Disable Autostart</button>
+            </div>
+            <h3>Raw Status Output</h3>
+            <pre id="status-output">Select a VM and service to see status.</pre>
+        </section>
+
+        <!-- Monitor Section -->
+        <section id="monitor-section" style="display: none;">
+            <h2>Live Log Monitor</h2>
+            <div class="monitor-header">
+                <div>
+                    <select id="monitor-vm-select"></select>
+                    <input type="text" id="log-file-path" placeholder="/opt/myapp/execution_log.txt">
+                    <button id="connect-log-btn">Connect</button>
+                </div>
+                <div>
+                    Lines received: <span id="line-count">0</span>
+                </div>
+            </div>
+            <div id="log-output"></div>
+        </section>
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>
