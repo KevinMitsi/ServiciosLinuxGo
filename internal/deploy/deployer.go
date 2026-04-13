@@ -3,11 +3,14 @@ package deploy
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/user/vm-manager/internal/ssh"
 )
@@ -24,6 +27,11 @@ func NewDeployer(client *ssh.Client) *Deployer {
 
 // Deploy unzips a file, creates a run script, and uploads everything.
 func (d *Deployer) Deploy(zipFile, vmName, destFolder, execArgs, mainBinary string) (string, error) {
+	remoteDest := normalizeRemoteDir(destFolder)
+	if remoteDest == "" {
+		return "", fmt.Errorf("destination folder is required")
+	}
+
 	// 1. Extract the .zip in a temporary local directory
 	tempDir, err := ioutil.TempDir("", "vm-deploy-")
 	if err != nil {
@@ -31,8 +39,12 @@ func (d *Deployer) Deploy(zipFile, vmName, destFolder, execArgs, mainBinary stri
 	}
 	defer os.RemoveAll(tempDir)
 
+	if err := validateZipSignature(zipFile); err != nil {
+		return "", err
+	}
+
 	if err := unzip(zipFile, tempDir); err != nil {
-		return "", fmt.Errorf("failed to unzip file: %v", err)
+		return "", fmt.Errorf("failed to unzip file: %v. Only valid .zip files are supported", err)
 	}
 
 	// 2. Create the wrapper script
@@ -61,7 +73,7 @@ exec "$SCRIPT_DIR/` + mainBinary + `" ` + execArgs + `
 	}
 
 	// 3. Create remote directory
-	if _, _, err := d.SSHClient.RunCommand(fmt.Sprintf("mkdir -p %s", destFolder)); err != nil {
+	if _, _, err := d.SSHClient.RunCommand(fmt.Sprintf("mkdir -p %q", remoteDest)); err != nil {
 		return "", fmt.Errorf("failed to create remote directory: %v", err)
 	}
 
@@ -73,20 +85,33 @@ exec "$SCRIPT_DIR/` + mainBinary + `" ` + execArgs + `
 
 	for _, file := range files {
 		localPath := filepath.Join(tempDir, file.Name())
-		remotePath := filepath.Join(destFolder, file.Name())
+		remotePath := path.Join(remoteDest, file.Name())
 		if err := d.SSHClient.UploadFile(localPath, remotePath); err != nil {
 			return "", fmt.Errorf("failed to upload file %s: %v", file.Name(), err)
 		}
 	}
 
 	// 5. Make scripts executable
-	execCmd := fmt.Sprintf("chmod +x %s/run.sh && chmod +x %s/%s", destFolder, destFolder, mainBinary)
+	runShRemote := path.Join(remoteDest, "run.sh")
+	mainBinaryRemote := path.Join(remoteDest, mainBinary)
+	execCmd := fmt.Sprintf("chmod +x %q && chmod +x %q", runShRemote, mainBinaryRemote)
 	if _, _, err := d.SSHClient.RunCommand(execCmd); err != nil {
 		return "", fmt.Errorf("failed to make scripts executable: %v", err)
 	}
 
 	// 6. Return the full path of run.sh
-	return filepath.Join(destFolder, "run.sh"), nil
+	return runShRemote, nil
+}
+
+func normalizeRemoteDir(dest string) string {
+	cleaned := strings.TrimSpace(strings.ReplaceAll(dest, "\\", "/"))
+	if cleaned == "" {
+		return ""
+	}
+	if !strings.HasPrefix(cleaned, "/") {
+		cleaned = "/" + cleaned
+	}
+	return path.Clean(cleaned)
 }
 
 func unzip(src, dest string) error {
@@ -126,5 +151,31 @@ func unzip(src, dest string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func validateZipSignature(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open uploaded file: %v", err)
+	}
+	defer f.Close()
+
+	header := make([]byte, 4)
+	n, err := io.ReadFull(f, header)
+	if err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return fmt.Errorf("uploaded file is too small to be a valid zip")
+		}
+		return fmt.Errorf("failed to read uploaded file header: %v", err)
+	}
+	if n < 4 {
+		return fmt.Errorf("uploaded file is too small to be a valid zip")
+	}
+
+	if header[0] != 'P' || header[1] != 'K' {
+		return fmt.Errorf("invalid file format: expected ZIP signature (PK)")
+	}
+
 	return nil
 }

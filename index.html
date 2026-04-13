@@ -44,8 +44,11 @@
                 <label for="ssh-user">SSH User</label>
                 <input type="text" id="ssh-user" name="ssh_user" required>
 
-                <label for="ssh-key-path">SSH Key Path</label>
-                <input type="text" id="ssh-key-path" name="ssh_key_path" required>
+                <label for="ssh-key-file">SSH Private Key File</label>
+                <input type="file" id="ssh-key-file" name="ssh_key_file" required>
+
+                <label for="ssh-key-path">Saved SSH Key Path</label>
+                <input type="text" id="ssh-key-path" name="ssh_key_path" readonly placeholder="Will be generated after selecting the key file">
 
                 <label for="ssh-port">SSH Port</label>
                 <input type="number" id="ssh-port" name="ssh_port" value="22" required>

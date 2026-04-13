@@ -10,7 +10,7 @@ import (
 	"io/ioutil"
 	"log/slog"
 	"os"
-	"path/filepath"
+	"path"
 	"sync"
 	"time"
 
@@ -116,12 +116,12 @@ func (c *Client) UploadFile(localPath, remotePath string) error {
 	go func() {
 		w, _ := session.StdinPipe()
 		defer w.Close()
-		fmt.Fprintf(w, "C%#o %d %s\n", stat.Mode().Perm(), stat.Size(), filepath.Base(remotePath))
+		fmt.Fprintf(w, "C%#o %d %s\n", stat.Mode().Perm(), stat.Size(), path.Base(remotePath))
 		io.Copy(w, file)
 		fmt.Fprint(w, "\x00")
 	}()
 
-	cmd := fmt.Sprintf("scp -t %s", filepath.Dir(remotePath))
+	cmd := fmt.Sprintf("scp -t %q", path.Dir(remotePath))
 	if err := session.Run(cmd); err != nil {
 		return fmt.Errorf("failed to run scp: %v", err)
 	}

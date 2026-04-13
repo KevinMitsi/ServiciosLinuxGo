@@ -154,7 +154,8 @@ func (h *Hub) HandleStatus(w http.ResponseWriter, r *http.Request) {
 			status, err := serviceManager.Status(serviceName)
 			if err != nil {
 				slog.Error("failed to get service status", "error", err)
-				conn.WriteMessage(websocket.TextMessage, []byte("Error getting status: "+err.Error()))
+				errPayload, _ := json.Marshal(map[string]string{"error": "Error getting status: " + err.Error()})
+				conn.WriteMessage(websocket.TextMessage, errPayload)
 				continue
 			}
 			jsonStatus, err := json.Marshal(status)

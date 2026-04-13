@@ -90,12 +90,23 @@ func (s *ServiceManager) Disable(unitName string) error {
 }
 
 func (s *ServiceManager) Status(unitName string) (ServiceStatus, error) {
-	stdout, _, err := s.SSHClient.RunCommand(fmt.Sprintf("systemctl status %s", unitName))
-	if err != nil && !strings.Contains(err.Error(), "exit status 3") { // systemd returns 3 for inactive services
+	stdout, stderr, err := s.SSHClient.RunCommand(fmt.Sprintf("sudo systemctl status %s --no-pager", unitName))
+	if err != nil && !isAllowedSystemctlStatusExit(err) {
 		return ServiceStatus{}, err
 	}
 
-	status := ServiceStatus{RawOutput: stdout}
+	rawOutput := stdout
+	if strings.TrimSpace(rawOutput) == "" {
+		rawOutput = stderr
+	}
+	status := ServiceStatus{RawOutput: rawOutput}
+
+	if strings.Contains(rawOutput, "could not be found") || strings.Contains(rawOutput, "not-found") {
+		status.ActiveState = "not-found"
+		status.SubState = "not-found"
+		return status, nil
+	}
+
 	lines := strings.Split(stdout, "\n")
 	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
@@ -122,4 +133,12 @@ func (s *ServiceManager) Status(unitName string) (ServiceStatus, error) {
 	}
 
 	return status, nil
+}
+
+func isAllowedSystemctlStatusExit(err error) bool {
+	errText := err.Error()
+	return strings.Contains(errText, "status 3") ||
+		strings.Contains(errText, "status 4") ||
+		strings.Contains(errText, "exit status 3") ||
+		strings.Contains(errText, "exit status 4")
 }

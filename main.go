@@ -2,17 +2,21 @@
 package main
 
 import (
+	"bufio"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/user/vm-manager/internal/deploy"
@@ -107,6 +111,27 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response does not implement http.Hijacker")
+	}
+	return hijacker.Hijack()
+}
+
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (r *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	if pusher, ok := r.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -124,6 +149,18 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		slog.Error("Failed to write JSON response", "status", status, "error", err)
+	}
+}
+
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
 func handleGetRegisteredVMs(w http.ResponseWriter, r *http.Request) {
 	slog.Info("Fetching registered VMs")
 	vms, err := vbox.GetRegisteredVMs()
@@ -138,19 +175,92 @@ func handleGetRegisteredVMs(w http.ResponseWriter, r *http.Request) {
 
 func handleRegisterVM(w http.ResponseWriter, r *http.Request) {
 	var vm vbox.VM
-	if err := json.NewDecoder(r.Body).Decode(&vm); err != nil {
-		slog.Warn("Invalid register VM request body", "error", err)
-		http.Error(w, `{"error": "Invalid request body"}`, http.StatusBadRequest)
+	contentType := r.Header.Get("Content-Type")
+
+	if strings.Contains(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(16 << 20); err != nil {
+			slog.Warn("Invalid multipart register VM request body", "error", err)
+			writeJSONError(w, http.StatusBadRequest, "Invalid multipart form")
+			return
+		}
+
+		vm.Name = r.FormValue("name")
+		vm.SSHUser = r.FormValue("ssh_user")
+		sshPort, err := strconv.Atoi(r.FormValue("ssh_port"))
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "Invalid ssh_port")
+			return
+		}
+		vm.SSHPort = sshPort
+
+		keyPath, err := saveUploadedSSHKey(r)
+		if err != nil {
+			slog.Error("Failed to save SSH key file", "error", err)
+			writeJSONError(w, http.StatusBadRequest, "Failed to save SSH key file: "+err.Error())
+			return
+		}
+		vm.SSHKeyPath = keyPath
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&vm); err != nil {
+			slog.Warn("Invalid register VM request body", "error", err)
+			writeJSONError(w, http.StatusBadRequest, "Invalid request body")
+			return
+		}
+	}
+
+	if vm.Name == "" || vm.SSHUser == "" || vm.SSHKeyPath == "" || vm.SSHPort <= 0 {
+		writeJSONError(w, http.StatusBadRequest, "Missing required VM fields")
 		return
 	}
+
 	slog.Info("Registering VM", "vm", vm.Name, "ssh_user", vm.SSHUser, "ssh_port", vm.SSHPort)
 	if err := vbox.RegisterVM(vm.Name, vm.SSHUser, vm.SSHKeyPath, vm.SSHPort); err != nil {
 		slog.Error("Failed to register VM", "vm", vm.Name, "error", err)
-		http.Error(w, `{"error": "`+err.Error()+`"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	slog.Info("VM registered", "vm", vm.Name)
-	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"message":      "VM registered",
+		"ssh_key_path": vm.SSHKeyPath,
+	})
+}
+
+func saveUploadedSSHKey(r *http.Request) (string, error) {
+	file, header, err := r.FormFile("ssh_key_file")
+	if err != nil {
+		return "", fmt.Errorf("ssh_key_file is required")
+	}
+	defer file.Close()
+
+	baseName := filepath.Base(header.Filename)
+	if baseName == "." || baseName == string(filepath.Separator) || baseName == "" {
+		return "", fmt.Errorf("invalid ssh key file name")
+	}
+
+	keysDir := filepath.Join("config", "keys")
+	if err := os.MkdirAll(keysDir, 0700); err != nil {
+		return "", fmt.Errorf("could not create keys directory: %w", err)
+	}
+
+	destination := filepath.Join(keysDir, fmt.Sprintf("%d_%s", time.Now().Unix(), baseName))
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return "", fmt.Errorf("could not create key file: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, file); err != nil {
+		return "", fmt.Errorf("could not save key file: %w", err)
+	}
+
+	absPath, err := filepath.Abs(destination)
+	if err != nil {
+		return "", fmt.Errorf("could not resolve key path: %w", err)
+	}
+
+	slog.Info("SSH key file saved", "file", absPath)
+	return absPath, nil
 }
 
 func handleDiscoverVMs(w http.ResponseWriter, r *http.Request) {
@@ -180,26 +290,32 @@ func handleVMInfo(w http.ResponseWriter, r *http.Request) {
 
 func handleDeploy(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil { // 32MB max
-		http.Error(w, `{"error": "Failed to parse multipart form"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "Failed to parse multipart form")
 		return
 	}
 
-	file, _, err := r.FormFile("zip_file")
+	file, header, err := r.FormFile("zip_file")
 	if err != nil {
-		http.Error(w, `{"error": "zip_file is required"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "zip_file is required")
 		return
 	}
+	if !strings.HasSuffix(strings.ToLower(header.Filename), ".zip") {
+		writeJSONError(w, http.StatusBadRequest, "Invalid file format: only .zip is supported. Please compress your app as .zip")
+		file.Close()
+		return
+	}
+
 	defer file.Close()
 
 	tempFile, err := os.CreateTemp("", "upload-*.zip")
 	if err != nil {
-		http.Error(w, `{"error": "Failed to create temp file"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to create temp file")
 		return
 	}
 	defer os.Remove(tempFile.Name())
 
 	if _, err := io.Copy(tempFile, file); err != nil {
-		http.Error(w, `{"error": "Failed to save uploaded file"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to save uploaded file")
 		return
 	}
 
@@ -213,7 +329,7 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 	sshClient, err := getSSHClientForVM(vmName)
 	if err != nil {
-		http.Error(w, `{"error": "`+err.Error()+`"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -221,7 +337,7 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 	execPath, err := deployer.Deploy(tempFile.Name(), vmName, destFolder, execArgs, mainBinary)
 	if err != nil {
 		slog.Error("Deploy failed", "vm", vmName, "error", err)
-		http.Error(w, `{"error": "Deployment failed: `+err.Error()+`"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Deployment failed: "+err.Error())
 		return
 	}
 
@@ -235,12 +351,15 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 	serviceManager := systemd.NewServiceManager(sshClient)
 	if err := serviceManager.Deploy(unitContent, serviceName); err != nil {
 		slog.Error("Systemd deploy failed", "service", serviceName, "error", err)
-		http.Error(w, `{"error": "Failed to deploy systemd service: `+err.Error()+`"}`, http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "Failed to deploy systemd service: "+err.Error())
 		return
 	}
 	slog.Info("Deploy completed", "vm", vmName, "service", serviceName, "exec_path", execPath)
 
-	fmt.Fprintf(w, `{"message": "Deployment successful", "service_file": "%s"}`, serviceName)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"message":      "Deployment successful",
+		"service_file": serviceName,
+	})
 }
 
 func handleServiceCreate(w http.ResponseWriter, r *http.Request) {

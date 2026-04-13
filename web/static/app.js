@@ -15,6 +15,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return response;
     }
 
+    async function readErrorMessage(response) {
+        try {
+            const data = await response.json();
+            if (data && data.error) {
+                return data.error;
+            }
+        } catch (_e) {
+            // Ignore and fallback to text.
+        }
+
+        try {
+            const text = await response.text();
+            if (text) {
+                return text;
+            }
+        } catch (_e) {
+            // Ignore and fallback below.
+        }
+
+        return `Request failed with status ${response.status}`;
+    }
+
     const sections = {
         vms: document.getElementById('vms-section'),
         deploy: document.getElementById('deploy-section'),
@@ -51,6 +73,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const vmList = document.getElementById('vm-list');
     const newVmForm = document.getElementById('new-vm-form');
     const vmNameSelect = document.getElementById('vm-name-select');
+    const sshKeyFileInput = document.getElementById('ssh-key-file');
+    const sshKeyPathInput = document.getElementById('ssh-key-path');
+
+    sshKeyFileInput.addEventListener('change', () => {
+        if (!sshKeyFileInput.files || sshKeyFileInput.files.length === 0) {
+            sshKeyPathInput.value = '';
+            return;
+        }
+
+        const selectedFile = sshKeyFileInput.files[0];
+        appLog('SSH key file selected', { name: selectedFile.name, size: selectedFile.size });
+        sshKeyPathInput.value = `Pending save: ${selectedFile.name}`;
+    });
 
     async function loadVms() {
         const response = await apiFetch('/api/vms');
@@ -105,17 +140,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
     newVmForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const formData = new FormData(newVmForm);
-        const data = Object.fromEntries(formData.entries());
-        data.ssh_port = parseInt(data.ssh_port);
-        appLog('Register VM submit', data);
+        const formData = new FormData();
+        formData.set('name', vmNameSelect.value);
+        formData.set('ssh_user', document.getElementById('ssh-user').value);
+        formData.set('ssh_port', document.getElementById('ssh-port').value);
 
-        await apiFetch('/api/vms', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
+        if (!sshKeyFileInput.files || sshKeyFileInput.files.length === 0) {
+            alert('Please select an SSH private key file.');
+            return;
+        }
+
+        formData.set('ssh_key_file', sshKeyFileInput.files[0]);
+        appLog('Register VM submit', {
+            name: vmNameSelect.value,
+            ssh_user: document.getElementById('ssh-user').value,
+            ssh_port: document.getElementById('ssh-port').value,
+            ssh_key_file: sshKeyFileInput.files[0].name,
         });
+
+        const response = await apiFetch('/api/vms', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error(await readErrorMessage(response));
+        }
+
+        const result = await response.json();
+        appLog('VM registered', result);
+        sshKeyPathInput.value = result.ssh_key_path || '';
         newVmForm.reset();
+        if (result.ssh_key_path) {
+            sshKeyPathInput.value = result.ssh_key_path;
+        }
         loadVms();
     });
 
@@ -148,6 +206,15 @@ document.addEventListener('DOMContentLoaded', () => {
     deployForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const formData = new FormData(deployForm);
+        const selectedFile = formData.get('zip_file');
+
+        if (!(selectedFile instanceof File) || !selectedFile.name.toLowerCase().endsWith('.zip')) {
+            progressText.textContent = 'Error: solo se admite archivo .zip (no .rar).';
+            progressBar.style.backgroundColor = 'red';
+            progressBar.parentElement.style.display = 'block';
+            appLog('Deploy blocked: invalid file format', selectedFile ? selectedFile.name : 'none');
+            return;
+        }
         
         progressBar.style.width = '0%';
         progressText.textContent = 'Starting...';
@@ -160,8 +227,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error);
+                throw new Error(await readErrorMessage(response));
             }
             
             // This is a simplified progress indicator.
@@ -223,13 +289,27 @@ document.addEventListener('DOMContentLoaded', () => {
             statusSocket.close();
         }
 
-        const wsUrl = `ws://${window.location.host}/ws/status?vm=${vmName}&service=${serviceName}`;
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsUrl = `${wsProtocol}://${window.location.host}/ws/status?vm=${encodeURIComponent(vmName)}&service=${encodeURIComponent(serviceName)}`;
         appLog('Connecting status websocket', wsUrl);
         statusSocket = new WebSocket(wsUrl);
 
         statusSocket.onmessage = (event) => {
-            const status = JSON.parse(event.data);
-            updateDashboard(status);
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload.error) {
+                    statusOutput.textContent = payload.error;
+                    statusBadge.textContent = 'error';
+                    statusBadge.className = 'badge failed';
+                    appLog('Status websocket payload error', payload.error);
+                    return;
+                }
+
+                updateDashboard(payload);
+            } catch (_error) {
+                statusOutput.textContent = `Invalid status payload: ${event.data}`;
+                appLog('Invalid status websocket payload', event.data);
+            }
         };
         statusSocket.onerror = (err) => {
             console.error('Status WS Error:', err);
