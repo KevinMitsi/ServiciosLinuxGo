@@ -159,6 +159,25 @@ func RegisterVM(vmName, sshUser, sshKeyPath string, sshPort int) error {
 	return nil
 }
 
+// StartVM enciende una VM en VirtualBox (si ya esta running, no hace nada).
+func StartVM(vmName string) error {
+	slog.Info("VBox start VM requested", "vm", vmName)
+
+	info, err := GetVMInfo(vmName)
+	if err == nil && strings.EqualFold(info.State, "running") {
+		slog.Info("VBox VM already running", "vm", vmName)
+		return nil
+	}
+
+	if _, err := runVBoxCommand("startvm", vmName, "--type", "headless"); err != nil {
+		slog.Error("VBox start VM failed", "vm", vmName, "error", err)
+		return fmt.Errorf("failed to start vm %s: %v", vmName, err)
+	}
+
+	slog.Info("VBox VM started", "vm", vmName)
+	return nil
+}
+
 // GetVMIP obtiene la IP de la VM via VBoxManage.
 func GetVMIP(vmName string) (string, error) {
 	slog.Info("VBox guestproperty get started", "vm", vmName)
