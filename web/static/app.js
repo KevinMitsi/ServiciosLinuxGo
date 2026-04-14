@@ -100,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${vm.ssh_port}</td>
                 <td id="vm-status-${vm.name}">loading...</td>
                 <td><button class="get-ip-btn" data-vm="${vm.name}">Get IP</button></td>
+                <td><button class="vm-power-btn" data-vm="${vm.name}" data-action="start">Encender</button></td>
             `;
             vmList.appendChild(row);
             updateVmStatus(vm.name);
@@ -121,20 +122,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function updateVmStatus(vmName) {
         const statusCell = document.getElementById(`vm-status-${vmName}`);
+        const powerBtn = vmList.querySelector(`.vm-power-btn[data-vm="${vmName}"]`);
         try {
-            const response = await apiFetch(`/api/vms/${vmName}/info`);
+            const response = await apiFetch(`/api/vms/${encodeURIComponent(vmName)}/info`);
             const info = await response.json();
             appLog('VM status updated', { vmName, info });
             statusCell.textContent = `${info.state} (${info.ip})`;
+            if (powerBtn) {
+                powerBtn.disabled = false;
+            }
             if (info.state === 'running') {
                 statusCell.style.color = 'green';
+                if (powerBtn) {
+                    powerBtn.textContent = 'Apagar';
+                    powerBtn.dataset.action = 'stop';
+                    powerBtn.classList.add('power-off-btn');
+                    powerBtn.classList.remove('power-on-btn');
+                }
             } else {
                 statusCell.style.color = 'red';
+                if (powerBtn) {
+                    powerBtn.textContent = 'Encender';
+                    powerBtn.dataset.action = 'start';
+                    powerBtn.classList.add('power-on-btn');
+                    powerBtn.classList.remove('power-off-btn');
+                }
             }
         } catch (error) {
             appLog('VM status update failed', { vmName, error });
             statusCell.textContent = 'Error';
             statusCell.style.color = 'orange';
+            if (powerBtn) {
+                powerBtn.disabled = true;
+            }
         }
     }
 
@@ -181,6 +201,31 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.classList.contains('get-ip-btn')) {
             const vmName = e.target.dataset.vm;
             updateVmStatus(vmName);
+            return;
+        }
+
+        if (e.target.classList.contains('vm-power-btn')) {
+            const vmName = e.target.dataset.vm;
+            const action = e.target.dataset.action;
+            e.target.disabled = true;
+
+            try {
+                const response = await apiFetch(`/api/vms/${encodeURIComponent(vmName)}/${action}`, {
+                    method: 'POST',
+                });
+
+                if (!response.ok) {
+                    throw new Error(await readErrorMessage(response));
+                }
+
+                appLog('VM power action executed', { vmName, action });
+            } catch (error) {
+                appLog('VM power action failed', { vmName, action, error });
+                alert(`No se pudo ${action === 'start' ? 'encender' : 'apagar'} la VM: ${error.message}`);
+            } finally {
+                e.target.disabled = false;
+                updateVmStatus(vmName);
+            }
         }
     });
 

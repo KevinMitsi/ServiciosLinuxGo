@@ -178,6 +178,25 @@ func StartVM(vmName string) error {
 	return nil
 }
 
+// StopVM apaga una VM en VirtualBox (si no esta running, no hace nada).
+func StopVM(vmName string) error {
+	slog.Info("VBox stop VM requested", "vm", vmName)
+
+	info, err := GetVMInfo(vmName)
+	if err == nil && !strings.EqualFold(info.State, "running") {
+		slog.Info("VBox VM already stopped", "vm", vmName, "state", info.State)
+		return nil
+	}
+
+	if _, err := runVBoxCommand("controlvm", vmName, "poweroff"); err != nil {
+		slog.Error("VBox stop VM failed", "vm", vmName, "error", err)
+		return fmt.Errorf("failed to stop vm %s: %v", vmName, err)
+	}
+
+	slog.Info("VBox VM stopped", "vm", vmName)
+	return nil
+}
+
 // GetVMIP obtiene la IP de la VM via VBoxManage.
 func GetVMIP(vmName string) (string, error) {
 	slog.Info("VBox guestproperty get started", "vm", vmName)

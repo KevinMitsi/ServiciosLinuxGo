@@ -40,6 +40,8 @@ func main() {
 	mux.HandleFunc("POST /api/vms", handleRegisterVM)
 	mux.HandleFunc("/api/vms/discover", handleDiscoverVMs)
 	mux.HandleFunc("/api/vms/{name}/info", handleVMInfo)
+	mux.HandleFunc("POST /api/vms/{name}/start", handleVMStart)
+	mux.HandleFunc("POST /api/vms/{name}/stop", handleVMStop)
 	mux.HandleFunc("/api/deploy", handleDeploy)
 
 	mux.HandleFunc("/api/service/create", handleServiceCreate)
@@ -294,6 +296,32 @@ func handleVMInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("VM info fetched", "vm", vmName, "state", info.State, "ip", info.IP)
 	json.NewEncoder(w).Encode(info)
+}
+
+func handleVMStart(w http.ResponseWriter, r *http.Request) {
+	vmName := r.PathValue("name")
+	slog.Info("VM start requested", "vm", vmName)
+
+	if err := vbox.StartVM(vmName); err != nil {
+		slog.Error("VM start failed", "vm", vmName, "error", err)
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "VM started"})
+}
+
+func handleVMStop(w http.ResponseWriter, r *http.Request) {
+	vmName := r.PathValue("name")
+	slog.Info("VM stop requested", "vm", vmName)
+
+	if err := vbox.StopVM(vmName); err != nil {
+		slog.Error("VM stop failed", "vm", vmName, "error", err)
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "VM stopped"})
 }
 
 func handleDeploy(w http.ResponseWriter, r *http.Request) {

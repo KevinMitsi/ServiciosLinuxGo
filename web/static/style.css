@@ -164,6 +164,28 @@ button:disabled {
     margin-right: 10px;
 }
 
+.vm-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.power-on-btn {
+    background-color: #28a745;
+}
+
+.power-on-btn:hover {
+    background-color: #1f8a39;
+}
+
+.power-off-btn {
+    background-color: #dc3545;
+}
+
+.power-off-btn:hover {
+    background-color: #b32635;
+}
+
 pre {
     background-color: #222;
     color: #eee;
