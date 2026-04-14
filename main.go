@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -345,7 +346,7 @@ func handleDeploy(w http.ResponseWriter, r *http.Request) {
 	unitCfg := systemd.ServiceConfig{
 		Description: serviceDesc,
 		ExecStart:   execPath,
-		WorkDir:     filepath.Dir(execPath),
+		WorkDir:     path.Dir(execPath),
 	}
 	unitContent := systemd.GenerateUnitFile(unitCfg)
 	serviceManager := systemd.NewServiceManager(sshClient)
