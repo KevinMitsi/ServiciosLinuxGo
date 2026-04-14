@@ -220,10 +220,17 @@ func handleRegisterVM(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	started := true
+	if err := vbox.StartVM(vm.Name); err != nil {
+		started = false
+		slog.Error("VM registered but failed to start automatically", "vm", vm.Name, "error", err)
+	}
 	slog.Info("VM registered", "vm", vm.Name)
-	writeJSON(w, http.StatusCreated, map[string]string{
+	writeJSON(w, http.StatusCreated, map[string]any{
 		"message":      "VM registered",
 		"ssh_key_path": vm.SSHKeyPath,
+		"started":      started,
 	})
 }
 
