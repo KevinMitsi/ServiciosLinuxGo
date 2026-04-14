@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type VM struct {
@@ -175,6 +176,49 @@ func StartVM(vmName string) error {
 	}
 
 	slog.Info("VBox VM started", "vm", vmName)
+	return nil
+}
+
+// StartVMAndWaitForIP enciende la VM y espera hasta que VBoxManage retorne IP valida.
+// Hace polling cada pollInterval hasta maxAttempts.
+func StartVMAndWaitForIP(vmName string, pollInterval time.Duration, maxAttempts int) (string, int, error) {
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	if maxAttempts <= 0 {
+		maxAttempts = 60
+	}
+
+	slog.Info("VM start with wait requested", "vm", vmName, "poll_interval", pollInterval.String(), "max_attempts", maxAttempts)
+	if err := StartVM(vmName); err != nil {
+		return "", 0, err
+	}
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		ip, err := GetVMIP(vmName)
+		if err == nil && strings.TrimSpace(ip) != "" && !strings.EqualFold(ip, "no value set") {
+			slog.Info("VM startup check success", "vm", vmName, "attempt", attempt, "ip", ip)
+			return ip, attempt, nil
+		}
+
+		slog.Info("VM startup check pending", "vm", vmName, "attempt", attempt, "max_attempts", maxAttempts, "error", err)
+		if attempt < maxAttempts {
+			time.Sleep(pollInterval)
+		}
+	}
+
+	return "", maxAttempts, fmt.Errorf("vm %s did not report IP after %d attempts", vmName, maxAttempts)
+}
+
+// StopVM apaga una VM en VirtualBox con poweroff inmediato.
+func StopVM(vmName string) error {
+	slog.Info("VBox stop VM requested", "vm", vmName)
+	if _, err := runVBoxCommand("controlvm", vmName, "poweroff"); err != nil {
+		slog.Error("VBox stop VM failed", "vm", vmName, "error", err)
+		return fmt.Errorf("failed to stop vm %s: %v", vmName, err)
+	}
+
+	slog.Info("VBox VM stopped", "vm", vmName)
 	return nil
 }
 

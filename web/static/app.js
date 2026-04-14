@@ -99,11 +99,46 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${vm.ssh_user}</td>
                 <td>${vm.ssh_port}</td>
                 <td id="vm-status-${vm.name}">loading...</td>
-                <td><button class="get-ip-btn" data-vm="${vm.name}">Get IP</button></td>
+                <td>
+                    <button class="vm-start-btn" data-vm="${vm.name}">Encender</button>
+                    <button class="vm-stop-btn" data-vm="${vm.name}">Apagar</button>
+                    <button class="get-ip-btn" data-vm="${vm.name}">Actualizar estado</button>
+                </td>
             `;
             vmList.appendChild(row);
             updateVmStatus(vm.name);
         });
+    }
+
+    function normalizeVmState(state) {
+        const normalized = (state || '').toLowerCase();
+        if (normalized === 'running') {
+            return { label: 'encendida', color: 'green', running: true };
+        }
+
+        if (normalized === 'poweroff' || normalized === 'stopped' || normalized === 'saved' || normalized === 'aborted') {
+            return { label: 'detenida', color: '#8a5a00', running: false };
+        }
+
+        if (!normalized) {
+            return { label: 'desconocido', color: 'orange', running: false };
+        }
+
+        return { label: normalized, color: 'orange', running: false };
+    }
+
+    function updateVmActionButtons(vmName, isRunning, busy = false) {
+        const startBtn = vmList.querySelector(`.vm-start-btn[data-vm="${vmName}"]`);
+        const stopBtn = vmList.querySelector(`.vm-stop-btn[data-vm="${vmName}"]`);
+        const refreshBtn = vmList.querySelector(`.get-ip-btn[data-vm="${vmName}"]`);
+
+        if (!startBtn || !stopBtn || !refreshBtn) {
+            return;
+        }
+
+        startBtn.disabled = busy || isRunning;
+        stopBtn.disabled = busy || !isRunning;
+        refreshBtn.disabled = busy;
     }
 
     async function populateVmSelect() {
@@ -125,16 +160,67 @@ document.addEventListener('DOMContentLoaded', () => {
             const response = await apiFetch(`/api/vms/${vmName}/info`);
             const info = await response.json();
             appLog('VM status updated', { vmName, info });
-            statusCell.textContent = `${info.state} (${info.ip})`;
-            if (info.state === 'running') {
-                statusCell.style.color = 'green';
-            } else {
-                statusCell.style.color = 'red';
-            }
+            const normalized = normalizeVmState(info.state);
+            const hasIP = info.ip && info.ip !== 'N/A';
+            const isRunning = normalized.running && hasIP;
+
+            statusCell.textContent = `${normalized.label} (${info.ip || 'N/A'})`;
+            statusCell.style.color = normalized.color;
+            updateVmActionButtons(vmName, isRunning);
         } catch (error) {
             appLog('VM status update failed', { vmName, error });
             statusCell.textContent = 'Error';
             statusCell.style.color = 'orange';
+            updateVmActionButtons(vmName, false);
+        }
+    }
+
+    async function startVm(vmName) {
+        const statusCell = document.getElementById(`vm-status-${vmName}`);
+        updateVmActionButtons(vmName, false, true);
+        statusCell.textContent = 'encendiendo... (esperando IP)';
+        statusCell.style.color = '#1e70bf';
+
+        try {
+            const response = await apiFetch(`/api/vms/${vmName}/start`, { method: 'POST' });
+            if (!response.ok) {
+                throw new Error(await readErrorMessage(response));
+            }
+
+            const data = await response.json();
+            appLog('VM started from UI', data);
+            statusCell.textContent = `encendida (${data.ip || 'N/A'})`;
+            statusCell.style.color = 'green';
+            updateVmActionButtons(vmName, true);
+        } catch (error) {
+            appLog('Start VM failed from UI', { vmName, error });
+            statusCell.textContent = `Error: ${error.message}`;
+            statusCell.style.color = 'orange';
+            updateVmActionButtons(vmName, false);
+        }
+    }
+
+    async function stopVm(vmName) {
+        const statusCell = document.getElementById(`vm-status-${vmName}`);
+        updateVmActionButtons(vmName, true, true);
+        statusCell.textContent = 'apagando...';
+        statusCell.style.color = '#8a5a00';
+
+        try {
+            const response = await apiFetch(`/api/vms/${vmName}/stop`, { method: 'POST' });
+            if (!response.ok) {
+                throw new Error(await readErrorMessage(response));
+            }
+
+            appLog('VM stopped from UI', { vmName });
+            statusCell.textContent = 'detenida (N/A)';
+            statusCell.style.color = '#8a5a00';
+            updateVmActionButtons(vmName, false);
+        } catch (error) {
+            appLog('Stop VM failed from UI', { vmName, error });
+            statusCell.textContent = `Error: ${error.message}`;
+            statusCell.style.color = 'orange';
+            updateVmActionButtons(vmName, false);
         }
     }
 
@@ -181,6 +267,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.classList.contains('get-ip-btn')) {
             const vmName = e.target.dataset.vm;
             updateVmStatus(vmName);
+            return;
+        }
+
+        if (e.target.classList.contains('vm-start-btn')) {
+            const vmName = e.target.dataset.vm;
+            startVm(vmName);
+            return;
+        }
+
+        if (e.target.classList.contains('vm-stop-btn')) {
+            const vmName = e.target.dataset.vm;
+            stopVm(vmName);
         }
     });
 
