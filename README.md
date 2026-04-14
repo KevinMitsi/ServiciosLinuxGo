@@ -1,112 +1,155 @@
-# VM Deployment & Management Automator
+# ServiciosLinuxGo
 
-This is a Go-based web platform to automate deploying and managing applications on VirtualBox VMs using systemd.
+Plataforma web desarrollada en Go para automatizar despliegue, control y monitoreo de aplicaciones en maquinas virtuales Linux de VirtualBox mediante systemd.
 
-## Features
+## Proposito del proyecto
 
-- **VM Management**: Register VirtualBox VMs and view their status.
-- **Automated Deployment**: Upload a `.zip` archive, and the tool will unpack it, create a run script, and transfer it to the VM.
-- **Systemd Integration**: Automatically generates and manages `systemd` service units for your applications.
-- **Real-time Monitoring**: Live `tail -f` of log files and real-time service status polling via WebSockets.
-- **Single Binary**: The entire application, including the frontend, is compiled into a single, self-contained binary.
+El objetivo es centralizar en una sola interfaz web tareas que normalmente se hacen por consola:
 
-## Tech Stack
+1. Registrar una VM con sus credenciales SSH.
+2. Subir un paquete ZIP de aplicacion.
+3. Crear automaticamente un servicio systemd.
+4. Controlar el daemon (start/stop/restart/enable/disable).
+5. Visualizar estado y logs en tiempo real.
 
-- **Backend**: Go (`net/http`, `gorilla/websocket`, `golang.org/x/crypto/ssh`)
-- **Frontend**: Vanilla HTML, CSS, and JavaScript (embedded)
-- **VM Control**: `VBoxManage` command-line tool
-- **Remote Execution**: SSH
+## Funcionalidades implementadas
 
-## Project Structure
+1. Gestion de VMs registradas
+- Descubrimiento de VMs con `VBoxManage`.
+- Registro persistente en `config/vms.json`.
+- Carga y guardado de llave privada SSH en `config/keys/`.
+
+2. Despliegue automatizado desde ZIP
+- Recepcion de archivo `.zip` por formulario web.
+- Validacion basica de firma ZIP (`PK`).
+- Extraccion temporal y carga de archivos a la VM via SSH/SCP.
+- Generacion de `run.sh` con log incremental en `execution_log.txt`.
+
+3. Integracion con systemd
+- Generacion de archivo `.service` dinamico.
+- Publicacion en `/etc/systemd/system/<servicio>.service`.
+- Ejecucion de `daemon-reload` tras el despliegue.
+- Control remoto del servicio: iniciar, detener, reiniciar, habilitar y deshabilitar.
+
+4. Dashboard y monitoreo en tiempo real
+- Estado del servicio via WebSocket de estado (polling cada 3 segundos).
+- Streaming de logs con `tail -f` via WebSocket.
+- Vista Live Monitor para observar el archivo de log remoto.
+
+## Stack y herramientas usadas
+
+1. Backend
+- Go (`net/http`, `log/slog`, `archive/zip`, `os/exec`).
+- `golang.org/x/crypto/ssh` para ejecucion remota y transferencia.
+- `github.com/gorilla/websocket` para canales en tiempo real.
+
+2. Frontend
+- `index.html` + JavaScript y CSS en `web/static/`.
+- Fetch API para endpoints REST.
+- WebSocket nativo del navegador para estado/logs.
+
+3. Infraestructura
+- VirtualBox (`VBoxManage`) para descubrimiento e informacion de VMs.
+- Linux + systemd en la VM destino.
+
+## Estructura actual del proyecto
 
 ```
-/cmd/main.go                    # Entrypoint and API handlers
+/main.go                        # Servidor HTTP, rutas API y handlers
+/index.html                     # Interfaz principal
+/web/static/
+  app.js                        # Logica del frontend
+  style.css                     # Estilos de la interfaz
 /internal/
-  vbox/manager.go               # VBoxManage wrapper
-  ssh/client.go                 # SSH client pool
-  deploy/deployer.go            # Deployment logic (.zip handling)
-  systemd/service.go            # Systemd unit file generation and control
-  ws/hub.go                     # WebSocket hub for real-time updates
-/web/
-  templates/index.html          # Single Page Application UI
-  static/app.js                 # Frontend JavaScript
-  static/style.css              # Frontend CSS
+  vbox/manager.go               # Integracion con VBoxManage
+  ssh/client.go                 # Cliente SSH reutilizable + SCP
+  deploy/deployer.go            # Flujo de despliegue ZIP -> VM
+  systemd/service.go            # Generacion y control de servicios
+  ws/hub.go                     # Endpoints WebSocket (status y tail)
 /config/
-  vms.json                      # Persistence for registered VMs
-/go.mod
-/README.md
+  vms.json                      # Persistencia de VMs registradas
+  keys/                         # Llaves SSH cargadas por el usuario
 ```
 
-## Prerequisites
+## Flujo funcional de extremo a extremo
 
-1.  **Go**: Version 1.21 or later.
-2.  **VirtualBox**: Must be installed and `VBoxManage` must be in your system's PATH.
-3.  **Target VMs**:
-    *   Linux-based.
-    *   SSH server installed and running.
-    *   VirtualBox Guest Additions installed (for IP address retrieval).
-    *   A user account accessible via SSH with key-based authentication.
-    *   `sudo` access for that user to manage systemd services without a password.
+1. Registro de VM
+- El usuario selecciona la VM, usuario SSH, puerto y llave privada.
+- La plataforma guarda la configuracion para reutilizarla en deploy/control.
 
-## Setup
+2. Deploy de aplicacion
+- Se sube un ZIP con la aplicacion.
+- Se extrae temporalmente, se crea `run.sh` y se sube todo a la ruta destino.
+- Se genera y publica el servicio systemd con `ExecStart` apuntando a `run.sh`.
 
-### 1. Sudoers Configuration on Target VMs
+3. Activacion y control del daemon
+- Desde Service Dashboard se ejecutan acciones de control remoto (`start`, `stop`, `restart`, `enable`, `disable`).
+- El estado se actualiza automaticamente en la UI.
 
-For the application to manage `systemd` services, the SSH user needs passwordless `sudo` access for specific commands.
+4. Observabilidad
+- Live Monitor se conecta al archivo remoto de log (ejemplo: `/opt/hola_mundo/execution_log.txt`).
+- El contenido se transmite en vivo al navegador.
 
-Log into each target VM and add the following line to the sudoers file by running `sudo visudo`. Replace `your_ssh_user` with the actual username.
+## Requisitos previos
 
-```
+1. Go 1.21 o superior.
+2. VirtualBox instalado y `VBoxManage` disponible en PATH.
+3. VM Linux con:
+- SSH activo.
+- Usuario con acceso por llave privada.
+- `sudo` para operaciones de systemd.
+
+## Configuracion de sudoers en la VM
+
+Para operar servicios sin pedir contrasena en cada comando, configurar `sudoers` con `visudo`:
+
+```sh
 your_ssh_user ALL=(ALL) NOPASSWD: /bin/systemctl start *, /bin/systemctl stop *, /bin/systemctl restart *, /bin/systemctl enable *, /bin/systemctl disable *, /bin/systemctl daemon-reload, /usr/bin/tee /etc/systemd/system/*
 ```
 
-**WARNING**: This configuration allows the specified user to run several `systemctl` commands as root without a password. Only use this in a trusted development environment.
+Usar solo en entornos controlados de laboratorio/desarrollo.
 
-### 2. Compilation
+## Compilacion y ejecucion
 
-Navigate to the project's root directory and run the build command:
-
-```sh
-go build -o vm-manager ./cmd/main.go
-```
-
-This will create a single executable file named `vm-manager`.
-
-### 3. Running the Application
-
-Execute the compiled binary:
+En la raiz del proyecto:
 
 ```sh
-./vm-manager
+go build -o plataforma.exe .
 ```
 
-The web interface will be available at `http://localhost:8080`.
+Ejecucion:
 
-## How to Use
+```sh
+./plataforma.exe
+```
 
-1.  **Register a VM**:
-    *   Navigate to the "VM Management" section.
-    *   The dropdown will show VMs detected by `VBoxManage`.
-    *   Select a VM, and provide the SSH user, the **local path** to the corresponding private SSH key, and the SSH port.
-    *   Click "Register VM".
+La interfaz queda disponible en:
 
-2.  **Deploy an Application**:
-    *   Go to the "Deploy Application" section.
-    *   Select the target VM.
-    *   Choose the `.zip` file containing your application. Your application binary should be pre-compiled for the VM's architecture (e.g., `linux/amd64`).
-    *   Specify the destination folder on the VM (e.g., `/opt/myapp`).
-    *   Provide the name of the main executable binary inside the zip.
-    *   Add any command-line arguments your application needs.
-    *   Define a name for the systemd service (e.g., `myapp.service`).
-    *   Click "Deploy and Create Service".
+```text
+http://localhost:8080
+```
 
-3.  **Control a Service**:
-    *   Open the "Service Dashboard".
-    *   Select the VM and enter the service name you just created.
-    *   The dashboard will connect via WebSocket and show the live status.
-    *   Use the buttons to start, stop, restart, or manage the service's autostart behavior.
+## Endpoints principales
 
-4.  **Monitor Logs**:
-    *   Go to the "Live Monitor" section.
-    *   Select the VM and provide the full path to a log file (e.g., `/opt/myapp/execution_log.txt`).
-    *   Click "Connect" to start streaming the log file in real-time.
+1. REST
+- `GET /api/vms` - listar VMs registradas.
+- `POST /api/vms` - registrar VM.
+- `GET /api/vms/discover` - descubrir VMs de VirtualBox.
+- `GET /api/vms/{name}/info` - obtener estado/IP de VM.
+- `POST /api/deploy` - desplegar ZIP y crear servicio.
+- `POST /api/service/start|stop|restart|enable|disable` - control del servicio.
+- `GET /api/service/status` - estado del servicio.
+
+2. WebSocket
+- `/ws/status` - estado continuo del servicio.
+- `/ws/tail` - streaming de `tail -f` de un archivo remoto.
+
+## Notas operativas
+
+1. El deploy crea el servicio y hace `daemon-reload`, pero el inicio del daemon se ejecuta desde el dashboard (boton Start).
+2. Si la aplicacion no inicia, verificar primero en la VM:
+
+```sh
+sudo systemctl status <servicio>.service --no-pager -l
+sudo journalctl -u <servicio>.service --since "5 minutes ago" --no-pager -l
+```
