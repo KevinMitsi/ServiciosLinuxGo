@@ -2,7 +2,9 @@
 package systemd
 
 import (
+	"encoding/base64"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/user/vm-manager/internal/ssh"
@@ -31,6 +33,15 @@ func NewServiceManager(client *ssh.Client) *ServiceManager {
 }
 
 func GenerateUnitFile(cfg ServiceConfig) string {
+	execStart := strings.TrimSpace(strings.ReplaceAll(cfg.ExecStart, "\\", "/"))
+	workDir := strings.TrimSpace(strings.ReplaceAll(cfg.WorkDir, "\\", "/"))
+	if execStart != "" {
+		execStart = path.Clean(execStart)
+	}
+	if workDir != "" {
+		workDir = path.Clean(workDir)
+	}
+
 	return fmt.Sprintf(`[Unit]
 Description=%s
 After=network.target
@@ -46,12 +57,14 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
-`, cfg.Description, cfg.ExecStart, cfg.WorkDir)
+`, cfg.Description, execStart, workDir)
 }
 
 func (s *ServiceManager) Deploy(unitContent, unitFileName string) error {
 	remotePath := fmt.Sprintf("/etc/systemd/system/%s", unitFileName)
-	cmd := fmt.Sprintf("echo '%s' | sudo tee %s", unitContent, remotePath)
+	// Encode to base64 to safely pass through shell and avoid escaping issues
+	encoded := base64.StdEncoding.EncodeToString([]byte(unitContent))
+	cmd := fmt.Sprintf("echo '%s' | base64 -d | sudo tee %s", encoded, remotePath)
 	_, _, err := s.SSHClient.RunCommand(cmd)
 	if err != nil {
 		return fmt.Errorf("failed to write unit file: %v", err)

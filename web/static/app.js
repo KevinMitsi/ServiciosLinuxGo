@@ -351,11 +351,25 @@ document.addEventListener('DOMContentLoaded', () => {
         controlButtons[action].addEventListener('click', async () => {
             const vmName = dashboardVmSelect.value;
             const serviceName = serviceNameInput.value;
-            await apiFetch(`/api/service/${action}`, {
+            const response = await apiFetch(`/api/service/${action}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ vm_name: vmName, service_name: serviceName }),
             });
+
+            if (!response.ok) {
+                appLog('Service action failed', { action, status: response.status });
+                return;
+            }
+
+            if (action === 'enable') {
+                controlButtons.enable.disabled = true;
+                controlButtons.disable.disabled = false;
+            } else if (action === 'disable') {
+                controlButtons.enable.disabled = false;
+                controlButtons.disable.disabled = true;
+            }
+
             // The websocket will update the status automatically
         });
     });

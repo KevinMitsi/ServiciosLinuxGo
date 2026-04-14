@@ -176,12 +176,16 @@ pre {
 }
 
 #log-output {
+    margin: 0;
     height: 400px;
+    max-height: none;
     background-color: #1e1e1e;
     color: #d4d4d4;
     font-family: "Courier New", Courier, monospace;
     padding: 10px;
     overflow-y: scroll;
+    white-space: pre-wrap;
+    word-break: break-word;
     border-radius: 5px;
     border: 1px solid #333;
 }
